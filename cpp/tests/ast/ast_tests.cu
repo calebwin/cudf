@@ -22,17 +22,41 @@
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/types.hpp>
 
+#include <simt/type_traits>
 #include <tests/utilities/base_fixture.hpp>
 #include <tests/utilities/column_utilities.hpp>
 #include <tests/utilities/column_wrapper.hpp>
 #include <tests/utilities/table_utilities.hpp>
 #include <tests/utilities/type_lists.hpp>
+#include <type_traits>
 
 template <typename T>
 using column_wrapper = cudf::test::fixed_width_column_wrapper<T>;
 
 struct ASTTest : public cudf::test::BaseFixture {
+};
+
+struct test_functor {
+  template <typename OperatorFunctor,
+            typename LHS,
+            typename RHS,
+            typename Out = simt::std::invoke_result_t<OperatorFunctor, LHS, RHS>,
+            std::enable_if_t<cudf::ast::is_valid_binary_op<OperatorFunctor, LHS, RHS>>* = nullptr>
+  CUDA_HOST_DEVICE_CALLABLE decltype(auto) operator()(int* result)
+  {
+    *result = 42;
+  }
+
+  template <typename OperatorFunctor,
+            typename LHS,
+            typename RHS,
+            typename Out                                                                 = void,
+            std::enable_if_t<!cudf::ast::is_valid_binary_op<OperatorFunctor, LHS, RHS>>* = nullptr>
+  CUDA_HOST_DEVICE_CALLABLE decltype(auto) operator()(int* result)
+  {
+  }
 };
 
 TEST_F(ASTTest, BasicASTEvaluation)
@@ -96,6 +120,19 @@ TEST_F(ASTTest, BasicASTEvaluation)
   // cudf::test::expect_columns_equal(expect_less, result_less->view(), true);
   cudf::test::expect_columns_equal(expect_tree_1, result_tree_1->view(), true);
   cudf::test::expect_columns_equal(expect_tree_2, result_tree_2->view(), true);
+
+  static_assert(
+    cudf::ast::is_valid_binary_op<cudf::ast::operator_functor<cudf::ast::ast_operator::ADD>,
+                                  cudf::duration_ns,
+                                  cudf::duration_ns>,
+    "Valid");
+  int result = 0;
+  cudf::ast::ast_operator_dispatcher(cudf::ast::ast_operator::ADD,
+                                     cudf::data_type(cudf::type_id::INT32),
+                                     cudf::data_type(cudf::type_id::INT32),
+                                     test_functor{},
+                                     &result);
+  EXPECT_EQ(result, 42);
 }
 
 CUDF_TEST_PROGRAM_MAIN()
